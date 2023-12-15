@@ -1,0 +1,232 @@
+---
+title: 'DATA 607 Final Project: Accurate Weather Prediction for JFK Airport NYC'
+author: "Lwin Shwe"
+date: "2023-12-14"
+output:
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Introduction
+
+The project encompasses the time series climate data analysis to make short-term prediction of maximum wind speed, potential wind direction around flight landing zones and forecast extreme precipitation at JFK airport.
+
+```{r packages}
+library(xts) #  for manipulating and analyzing time series data
+library(tsbox)
+library(forecast)
+library(dplyr)
+library(imputeTS)
+library(ggplot2)
+```
+
+
+### Load the Data
+
+The real time observational climate data in csv file is downloaded from National Oceanic and Atmospheric Administration (NOAA), https://www.ncei.noaa.gov/ at the JFK airport's weather station. After eliminating unwanted columns, the nyc_weather dataset has 3997 observations and 13 variables. 
+
+The variables of particular interest for this analysis are the following.
+
+WDF5: Wind Direction of fastest 5-sec (degrees)
+WSF5: Wind Speed of fastest 5-sec (kmph)
+PRCP: Precipitiation in (inches)
+
+```{r weather-data}
+csv = read.csv("https://www.ncei.noaa.gov/orders/cdo/3544714.csv", na.strings = c("", "NA", "N/A")) 
+
+range(csv$DATE)
+
+# Delete empty data columns
+csv_del <- csv[, -c(16:29)]
+nyc_weather <- csv_del[, !names(csv_del) %in% c("PGTM", "TAVG")]
+head(nyc_weather)
+```
+
+### Converting Time-Series Data
+
+One of the primary objectives of converting observational to time series data is to be able to forecast the values for that series at future times. In the project, ARIMA forecasting model is applied to visualize the trends of accurate of NYC weather data analysis at JFK airport.
+
+```{r conversion}
+# Creating an xts object from the selected columns of the 'nyc_weather' dataset
+real_time_nyc_weather = xts(nyc_weather[,c("WDF5","WSF5","PRCP")], order.by=as.Date(nyc_weather$DATE))
+# Ensuring regular time intervals in the time series data
+real_time_nyc_weather = ts_regular(real_time_nyc_weather)
+# Filling missing values by extending the last observation forward
+real_time_nyc_weather = na.fill(real_time_nyc_weather, "extend")
+# Trimming the time series data
+real_time_nyc_weather = window(real_time_nyc_weather, start=as.Date("2013-01-01"), end=as.Date("2023-12-11"))
+
+```
+
+### Visualization of Real_Time_NYC_Weather_Data
+
+```{r plot}
+# Plotting Wind Direction and Wind Speed
+plot(ts_ts(real_time_nyc_weather$WDF5), col="brown", bty="n", las=1, fg=NA, 
+	ylim=c(20, 360), ylab="Wind Direction (deg) and Speed (mph)")
+lines(ts_ts(real_time_nyc_weather$WSF5), col="purple")
+grid(nx=NA, ny=NULL, lty=1, col="gray")
+legend("topright", fill=c("brown", "purple"), cex=0.7,
+	legend=c("WDF5", "WSF5"), bg="white")
+
+# Creating a bar plot for Daily Rainfall
+barplot(real_time_nyc_weather$PRCP, border=NA, col="darkblue", ylim=c(0, 2),
+	space=0, bty="n", las=1, fg=NA, ylab="Daily Rainfall (inches)")
+grid(nx=NA, ny=NULL, lty=1)
+```
+
+A diagram of WDT5 and WSF5 shows the annual cycle of wind speed and direction as well as gusty wind that spike above the general curve.
+A diagram of daily of rainfall shows no clear seasonal pattern, although the presence of a number of high precipitation days over a decade is noticeable.
+
+### Analyze Data
+
+A descriptive statistics and characteristics of a time series data set with three columns: 'WDF5', 'WSF5', and 'PRCP' for the specified time period (2013-01-01 to 2023-12-11), offering insights into the range, central tendency, and variability of the recorded wind speed, direction and precipitation measurements.
+
+```{r Analysis}
+#Summary Descriptive Data 
+summary(real_time_nyc_weather)
+#Structure of Data 
+str(real_time_nyc_weather)
+```
+
+### Time Series Decomposition
+
+Time series decomposition separates data set into three fundamental components that can be added together to create the original data:
+A seasonal component
+A long-term trend component and 
+A random component
+
+When using  weather data over a past decade to anticipate what might happen in the future, we often wish to separates the seasonal and random components to see the long term trends of historical data.
+
+```{r tsd}
+# Performing interpolation to fill missing values 
+imputed_ts_nyc_weather <- na.interpolation(real_time_nyc_weather)
+
+#Analysis on Fastest Wind Direction
+decomposition = stl(ts_ts(imputed_ts_nyc_weather$WDF5), s.window=365, t.window=7001)
+plot(decomposition)
+summary(decomposition$time.series[,"trend"])
+
+#Analysis on Fastest Wind Speed
+decomposition = stl(ts_ts(imputed_ts_nyc_weather$WSF5), s.window=365, t.window=7001)
+plot(decomposition)
+summary(decomposition$time.series[,"trend"])
+
+#Analysis on precipitation
+decomposition = stl(ts_ts(imputed_ts_nyc_weather$PRCP), s.window=365, t.window=7001)
+plot(decomposition)
+summary(decomposition$time.series[,"trend"])
+```
+
+The trend of wind direction indicates an increase of approximately 0.2 degrees over the time period 2013 - 2023. The trend of wind speeds illustrates a slightly increase from 2013 - 2018, then wind speed is getting decrease until the end of the year 2023. The trend of precipitation has a small daily rise nearly 0.01 inches over the past 10 years, 
+
+
+### Find average monthly wind speed, wind direction and rainfall at JFK Airport
+
+Although having daily weather observations is extremely useful for analysis, visualization of decomposition captures trends, but might be confusing to others with no experience with time series analysis.
+Therefore, the aggregation by mean value smooths out the daily randomness to make the overall cycles and trends clearer.
+
+```{r aggregation}
+# Use aggregate() function
+monthly_wind_speed <- aggregate(
+  imputed_ts_nyc_weather$WSF5,
+  as.yearmon,
+  FUN = mean
+)
+
+# Plot the aggregated series
+plot(ts_ts(monthly_wind_speed), col = "darkred", ylim = c(10, 50), 
+     lwd = 3, bty = "n", las = 1, fg = NA, ylab = "Average Wind Speed (kmph)")
+grid(nx = NA, ny = NULL, lty = 1)
+
+
+# Find Monthly maximum rainfall amount
+monthly_max_rainfall <- aggregate(
+  imputed_ts_nyc_weather$PRCP,
+  as.yearmon,
+  FUN = max
+)
+
+# Plot the aggregated series
+plot(ts_ts(monthly_max_rainfall), col = "darkred", ylim = c(0, 10), 
+     lwd = 3, bty = "n", las = 1, fg = NA, ylab = "Monthly Max rainfall (inches)")
+grid(nx = NA, ny = NULL, lty = 1)
+
+# Use aggregate() function
+monthly_wind_dir <- aggregate(
+  imputed_ts_nyc_weather$WDF5,
+  as.yearmon,
+  FUN = mean
+)
+
+# Plot the aggregated series of Wind Direction
+plot(ts_ts(monthly_wind_dir), col = "darkred", ylim = c(1, 360), 
+     lwd = 3, bty = "n", las = 1, fg = NA, ylab = "Average Wind Direction (degree)")
+grid(nx = NA, ny = NULL, lty = 1)
+
+```
+
+A line plot of average monthly wind speed shows the trend of average wind speed (in kilometers per hour), maximum monthly rainfall (in inches), and average wind direction (in degrees) across different months between 2013 to 2024.
+
+
+### Time Series Analysis: ARIMA Forecasts 
+
+Auto regressive integrated moving average (ARIMA) model involves a more detailed analysis of the training data using lags and forecast errors.For highly detailed weather observations data, the model takes several minutes of computing time rather than seconds.
+
+
+```{r arima}
+## Apply an ARIMA model to wind speed data
+
+training.data = ts_ts(imputed_ts_nyc_weather$WSF5)
+parameters = auto.arima(training.data)
+print(parameters)
+
+```
+
+This detailed information about the fitted ARIMA model, including its orders p = 4 (four autoregressive terms), d = 0 (no differencing), and q = 2 (two moving average terms), coefficients Autoregressive coefficients for lag 1, 2, 3, and 4, standard error for each estimates, other statistical significance, information criteria used for model selection, Lower values of AIC, AICc and BIC indicate a better-fitting model and measures evaluating the model's goodness of fit to selected data points.
+
+
+### Genearate a Forecast for 1825 days (approximately 5 years)
+
+```{r plot-arima}
+# Build an ARIMA model, generate forecasts
+arima.model = arima(training.data, order = c(5,0,1), seasonal = list(order=c(0,1,0), period=365))
+arima.windspeed = forecast(arima.model, 1825)
+
+# Plotpredicted mean monthly wind speed
+plot(arima.windspeed, lwd=3, bty="n", las=1, fg=NA, 
+	xlim=c(2013, 2024), ylab="Mean Monthly Wind Speed (kmph)")
+grid(nx=NA, ny=NULL, lty=1)
+```
+
+
+The plot displays the forecasted values of the mean monthly wind speed over time.
+
+### Forecasting extreme Precipation with ARIMA model
+
+```{r extreme-rainfall}
+## Apply an ARIMA model to nonseasonal data
+training.data = ts_ts(imputed_ts_nyc_weather$PRCP)
+parameters = auto.arima(training.data)
+print(parameters)
+
+arima.model = arima(training.data, order = c(5,0,1), seasonal = list(order=c(0,1,0), period=365))
+arima.windspeed = forecast(arima.model, 1825)
+
+plot(arima.windspeed, lwd=3, bty="n", las=1, fg=NA, 
+	xlim=c(2013, 2024), ylab="Monthly Precipatation (inches)")
+grid(nx=NA, ny=NULL, lty=1)
+```
+
+ARIMA mode is bulit to daily precipitation data points for JFK airport that generates forecasts, and creates a visualization of the predicted monthly precipitation over a specified time period.
+
+
+### Conclusions
+
+ARIMA model is a  popular time series forecasting technique used to predict future points in a series based on its past values. Predicting weather accurately for next five years can offer valuable insights into potential weather conditions that make passengers a safer trip. 
+However, the project is mainly analyzed on three variables: wind speed, wind direction and precipitation due to the limited data access. Combining ARIMA with other predictive models and incorporating additional weather-related factors, such as humidity, or pressure that could provide a more comprehensive forecast.
+
+
